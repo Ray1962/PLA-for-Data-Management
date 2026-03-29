@@ -176,7 +176,7 @@ def detect_turning_points_by_cusum(y, smooth_window=5, drift_k=0.5, threshold_k=
 
 def robust_slope_sigma(y_smooth):
     dy = np.diff(y_smooth)
-    
+
     if len(dy) == 0:
         return dy, 0.0
     baseline = float(np.median(dy))
@@ -185,6 +185,23 @@ def robust_slope_sigma(y_smooth):
     if sigma <= 1e-12:
         sigma = float(np.std(centered))
     return centered, max(sigma, 1e-12)
+
+
+def find_previous_local_peak(y_values, ref_idx):
+    """找 ref_idx 前方最近的局部高點，找不到則退回前段全域最高點。"""
+    if len(y_values) < 3 or ref_idx <= 0:
+        return None, None
+
+    last_idx = min(int(ref_idx) - 1, len(y_values) - 2)
+    for idx in range(last_idx, 0, -1):
+        if y_values[idx] >= y_values[idx - 1] and y_values[idx] >= y_values[idx + 1]:
+            return idx, float(y_values[idx])
+
+    search_end = min(int(ref_idx), len(y_values))
+    if search_end <= 0:
+        return None, None
+    peak_idx = int(np.argmax(y_values[:search_end]))
+    return peak_idx, float(y_values[peak_idx])
 
 
 def detect_steep_events(
@@ -198,15 +215,14 @@ def detect_steep_events(
     min_len=4,
     peak_quiet_run=3,
     steep_smooth_window=5,
-    rise_start_max=None,
-    fall_end_max=None,
+    pre_peak_percent=20.0,
 ):
     """偵測陡升/陡降事件，輸出每段起點與終點。
 
     steep_smooth_window：陡坡偵測專用平滑視窗，與 CUSUM 平滑視窗獨立。
     使用較小的視窗（預設 5）可保留真實斜率大小，避免大視窗壓低 sigma 導致誤判。
-    rise_start_max：陡升起點強度門泭，起點強度值必須小於此值才接受（None 表示不限制）。
-    fall_end_max：陡降終點強度門泭，終點強度值必須小於此值才接受（None 表示不限制）。
+    pre_peak_percent：以前面局部高點為基準的百分比。
+    陡升起點與陡降終點都必須低於「前面局部高點 * 百分比 / 100」。
     """
     # 用獨立視窗重新平滑，不依賴傳入的 CUSUM y_smooth
     y_steep = moving_average(y_arr, steep_smooth_window)
@@ -222,6 +238,7 @@ def detect_steep_events(
     start_idx = 0
     extremum_idx = 0
     no_new_extremum_run = 0
+    last_down_gate_value = None
     i = 0
 
     while i < len(centered):
@@ -284,22 +301,26 @@ def detect_steep_events(
                     end_idx = max(end_idx, extremum_idx)
             s_idx = max(0, start_idx)
             if end_idx - s_idx >= min_len:
-                # 陡升起點強度門泭檢查
-                if direction == "up" and rise_start_max is not None:
-                    if y_arr[s_idx] >= rise_start_max:
-                        state = "idle"
-                        direction = None
-                        no_new_extremum_run = 0
-                        i += 1
-                        continue
-                # 陡降終點強度門泭檢查
-                if direction == "down" and fall_end_max is not None:
-                    if y_arr[end_idx] >= fall_end_max:
-                        state = "idle"
-                        direction = None
-                        no_new_extremum_run = 0
-                        i += 1
-                        continue
+                if pre_peak_percent is not None:
+                    if direction == "up":
+                        # 陡升起點直接沿用上一個陡降終點計算出的門檻值，不再重算。
+                        if last_down_gate_value is not None and y_arr[s_idx] >= last_down_gate_value:
+                            state = "idle"
+                            direction = None
+                            no_new_extremum_run = 0
+                            i += 1
+                            continue
+                    else:
+                        peak_ref_idx, peak_value = find_previous_local_peak(y_steep, s_idx)
+                        if peak_value is not None:
+                            gate_value = peak_value * float(pre_peak_percent) / 100.0
+                            if y_arr[end_idx] >= gate_value:
+                                state = "idle"
+                                direction = None
+                                no_new_extremum_run = 0
+                                i += 1
+                                continue
+                            last_down_gate_value = gate_value
                 seg = centered[s_idx : min(i + 1, len(centered))]
                 events.append(
                     {
@@ -546,19 +567,12 @@ steep_sw_text = input(
 ).strip()
 steep_smooth_window = steep_sw_default if not steep_sw_text else max(1, int(steep_sw_text))
 
-rise_start_max_default = params.get("rise_start_max", 2000)
-rise_start_max_text = input(
-    f"陡升起點強度上限 (起點強度須小於此值，-1 表示不限制，預設 {rise_start_max_default}): "
+pre_peak_percent_default = float(params.get("pre_peak_percent", 20.0))
+pre_peak_percent_text = input(
+    f"陡升起點/陡降終點門檻 = 前面局部高點的百分比 (預設 {pre_peak_percent_default}，輸入負值表示不限制): "
 ).strip()
-rise_start_max_val = rise_start_max_default if not rise_start_max_text else float(rise_start_max_text)
-rise_start_max = None if rise_start_max_val < 0 else rise_start_max_val
-
-fall_end_max_default = params.get("fall_end_max", 2000)
-fall_end_max_text = input(
-    f"陡降終點強度上限 (終點強度須小於此值，-1 表示不限制，預設 {fall_end_max_default}): "
-).strip()
-fall_end_max_val = fall_end_max_default if not fall_end_max_text else float(fall_end_max_text)
-fall_end_max = None if fall_end_max_val < 0 else fall_end_max_val
+pre_peak_percent_val = pre_peak_percent_default if not pre_peak_percent_text else float(pre_peak_percent_text)
+pre_peak_percent = None if pre_peak_percent_val < 0 else pre_peak_percent_val
 
 show_steep_markers_default = bool(params.get("show_steep_markers", True))
 show_steep_markers_hint = "y" if show_steep_markers_default else "n"
@@ -581,8 +595,7 @@ steep_events, steep_start_th, steep_end_th = detect_steep_events(
     min_len=4,
     peak_quiet_run=peak_quiet_run,
     steep_smooth_window=steep_smooth_window,
-    rise_start_max=rise_start_max,
-    fall_end_max=fall_end_max,
+    pre_peak_percent=pre_peak_percent,
 )
 
 steep_idx = sorted(
@@ -744,8 +757,7 @@ save_params({
     "refine_search_radius": refine_search_radius,
     "peak_quiet_run": peak_quiet_run,
     "steep_smooth_window": steep_smooth_window,
-    "rise_start_max": rise_start_max_val,
-    "fall_end_max": fall_end_max_val,
+    "pre_peak_percent": pre_peak_percent_val,
     "show_steep_markers": show_steep_markers,
 })
 print(f"參數已儲存: {PARAMS_FILE}")
