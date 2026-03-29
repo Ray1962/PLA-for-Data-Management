@@ -1,0 +1,150 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import csv
+import re
+from pathlib import Path
+
+def douglas_peucker(points, epsilon):
+    """簡易 Douglas-Peucker 實現（points: n x 2 array [time, value]）"""
+    def perpendicular_distance(p, line_start, line_end):
+        line = line_end - line_start
+        denom = np.linalg.norm(line)
+        if denom == 0:
+            return np.linalg.norm(p - line_start)
+        # 2D 點到直線距離
+        return np.abs(line[0] * (line_start[1] - p[1]) - (line_start[0] - p[0]) * line[1]) / denom
+    
+    if len(points) < 3:
+        return points
+    dmax = 0
+    index = 0
+    for i in range(1, len(points) - 1):
+        d = perpendicular_distance(points[i], points[0], points[-1])
+        if d > dmax:
+            index, dmax = i, d
+    if dmax > epsilon:
+        rec1 = douglas_peucker(points[:index+1], epsilon)
+        rec2 = douglas_peucker(points[index:], epsilon)
+        return np.vstack((rec1[:-1], rec2))
+    else:
+        return np.vstack((points[0], points[-1]))
+
+def parse_spoes_csv(file_path):
+    """解析 SPOES CSV，取得波長對應與指定欄位數據。"""
+    wavelength_map = {}
+    with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+        # 先讀 Header 區塊
+        for line in f:
+            text = line.strip()
+            if text == "[Data]":
+                break
+            m = re.match(r"Wavelength(\d+)=([0-9.]+)", text)
+            if m:
+                idx = int(m.group(1))
+                wavelength = float(m.group(2))
+                wavelength_map[f"Ch1_{idx}"] = wavelength
+
+        # [Data] 下一行為欄名，後續為資料
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    return wavelength_map, rows
+
+
+def pick_channel_by_wavelength(wavelength_map, target_wavelength):
+    if not wavelength_map:
+        raise ValueError("找不到任何波長設定。")
+    best_channel = min(wavelength_map, key=lambda ch: abs(wavelength_map[ch] - target_wavelength))
+    return best_channel, wavelength_map[best_channel]
+
+
+def to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+csv_path = r"G:\我的雲端硬碟\01_Working\林口美光\SPOES\20260306\0306-All.csv"
+default_wavelength = 703.8
+
+wavelength_map, rows = parse_spoes_csv(csv_path)
+
+print("可用波長 (前 12 個):")
+for ch, wl in list(wavelength_map.items())[:12]:
+    print(f"  {ch}: {wl} nm")
+
+user_input = input(f"請輸入目標波長 (nm)，直接 Enter 使用預設 {default_wavelength}: ").strip()
+target_wavelength = default_wavelength if not user_input else float(user_input)
+
+channel_col, matched_wavelength = pick_channel_by_wavelength(wavelength_map, target_wavelength)
+print(f"\n選擇波長: {target_wavelength} nm -> 使用欄位 {channel_col} (實際 {matched_wavelength} nm)")
+
+x_values = []
+y_values = []
+for i, row in enumerate(rows):
+    y = to_float(row.get(channel_col))
+    if y is None:
+        continue
+    x = to_float(row.get("No"))
+    if x is None:
+        x = float(i)
+    x_values.append(x)
+    y_values.append(y)
+
+if len(y_values) < 3:
+    raise ValueError("有效資料點不足，無法進行壓縮。")
+
+points = np.column_stack((np.array(x_values), np.array(y_values)))
+
+# 可輸入 x 軸顯示範圍，留空代表使用完整範圍
+default_xmin = float(np.min(points[:, 0]))
+default_xmax = float(np.max(points[:, 0]))
+xmin_text = input(f"請輸入 x 軸最小值，直接 Enter 使用 {default_xmin}: ").strip()
+xmax_text = input(f"請輸入 x 軸最大值，直接 Enter 使用 {default_xmax}: ").strip()
+
+plot_xmin = default_xmin if not xmin_text else float(xmin_text)
+plot_xmax = default_xmax if not xmax_text else float(xmax_text)
+
+if plot_xmin >= plot_xmax:
+    print("x 軸範圍輸入無效（最小值需小於最大值），改用完整資料範圍。")
+    plot_xmin, plot_xmax = default_xmin, default_xmax
+
+# 以訊號振幅估計 epsilon，避免不同波長量級差異太大
+signal_span = float(np.max(points[:, 1]) - np.min(points[:, 1]))
+epsilon = max(signal_span * 0.01, 1e-6)
+compressed = douglas_peucker(points, epsilon=epsilon)
+
+print(f"原始點數: {len(points)}, 壓縮後點數: {len(compressed)}")  # 壓縮比通常 > 10x
+print(f"使用 epsilon: {epsilon:.6g}")
+
+# 畫出壓縮前後比較
+fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+
+axes[0].plot(points[:, 0], points[:, 1], color='steelblue', linewidth=0.8, label=f'原始資料 ({len(points)} 點)')
+axes[0].set_ylabel('Value')
+axes[0].set_title(f'壓縮前：{channel_col} ({matched_wavelength} nm)')
+axes[0].set_xlim(plot_xmin, plot_xmax)
+axes[0].legend(loc='upper right')
+axes[0].grid(True, alpha=0.3)
+
+axes[1].plot(compressed[:, 0], compressed[:, 1], color='tomato', linewidth=1.2,
+             marker='o', markersize=2, label=f'壓縮後 ({len(compressed)} 點, ε={epsilon:.3g})')
+axes[1].set_xlabel('Time')
+axes[1].set_ylabel('Value')
+axes[1].set_title('壓縮後：Douglas-Peucker')
+axes[1].set_xlim(plot_xmin, plot_xmax)
+axes[1].legend(loc='upper right')
+axes[1].grid(True, alpha=0.3)
+
+plt.suptitle(f'Douglas-Peucker 壓縮比較  壓縮率: {len(compressed)/len(points)*100:.1f}%', fontsize=13)
+plt.tight_layout()
+plt.show()
+
+output_path = Path(__file__).with_name(f"compressed_{channel_col}_{matched_wavelength}nm.csv")
+with open(output_path, "w", encoding="utf-8", newline="") as out_f:
+    writer = csv.writer(out_f)
+    writer.writerow(["x", channel_col])
+    writer.writerows(compressed)
+
+print(f"縮減後資料已輸出: {output_path}")
