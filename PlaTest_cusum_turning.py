@@ -472,75 +472,149 @@ y_arr = np.array(y_values)
 ts_arr = np.array(timestamps)
 points = np.column_stack((x_arr, y_arr))
 
-# 可輸入 x 軸顯示範圍
+# ── 初始化所有參數 ──────────────────────────────────────────────────────────
 default_xmin = float(np.min(x_arr))
 default_xmax = float(np.max(x_arr))
-prompt_xmin = params.get("xmin", default_xmin)
-prompt_xmax = params.get("xmax", default_xmax)
-xmin_text = input(f"請輸入 x 軸最小值，直接 Enter 使用 {prompt_xmin}: ").strip()
-xmax_text = input(f"請輸入 x 軸最大值，直接 Enter 使用 {prompt_xmax}: ").strip()
-plot_xmin = float(prompt_xmin) if not xmin_text else float(xmin_text)
-plot_xmax = float(prompt_xmax) if not xmax_text else float(xmax_text)
+
+_p = {
+    "xmin":                float(params.get("xmin",                default_xmin)),
+    "xmax":                float(params.get("xmax",                default_xmax)),
+    "mode":                params.get("mode",                      "manual"),
+    "target_keep_ratio":   float(params.get("target_keep_ratio",   0.06)),
+    "smooth_window":       int(params.get("smooth_window",         5)),
+    "drift_k":             float(params.get("drift_k",             0.5)),
+    "threshold_k":         float(params.get("threshold_k",         8.0)),
+    "min_distance":        int(params.get("min_distance",          8)),
+    "refine_search_radius":int(params.get("refine_search_radius",  4)),
+    "peak_quiet_run":      int(params.get("peak_quiet_run",        3)),
+    "steep_smooth_window": int(params.get("steep_smooth_window",   5)),
+    "pre_peak_percent_val":float(params.get("pre_peak_percent",    20.0)),
+    "show_steep_markers":  bool(params.get("show_steep_markers",   True)),
+    "plateau_shrink_pct":  float(params.get("plateau_shrink_pct",  5.0)),
+}
+
+def _show_menu(p):
+    use_a = p["mode"] in ("auto", "a", "自動")
+    mode_str = "auto（自動掃描）" if use_a else "manual（手動）"
+    pre_str  = f"{p['pre_peak_percent_val']} %" if p["pre_peak_percent_val"] >= 0 else "不限制"
+    sm_str   = "是" if p["show_steep_markers"] else "否"
+    cusum_note = "  ← auto 模式自動決定" if use_a else ""
+    print("\n" + "="*62)
+    print("  目前參數設定")
+    print("="*62)
+    print(f"  ── 基本設定 ──")
+    print(f"  [ 1]  x 軸最小值              : {p['xmin']}")
+    print(f"  [ 2]  x 軸最大值              : {p['xmax']}")
+    print(f"  [ 3]  參數模式                : {mode_str}")
+    if use_a:
+        print(f"  [ 4]  目標保留比例 (auto)     : {p['target_keep_ratio']}")
+    print(f"\n  ── CUSUM 轉折點{cusum_note} ──")
+    print(f"  [ 5]  平滑視窗                : {p['smooth_window']}")
+    print(f"  [ 6]  drift 係數              : {p['drift_k']}")
+    print(f"  [ 7]  threshold 係數          : {p['threshold_k']}")
+    print(f"  [ 8]  轉折點最小間距          : {p['min_distance']}")
+    print(f"  [ 9]  Refine 搜尋半徑         : {p['refine_search_radius']}")
+    print(f"\n  ── 陡升/陡降事件 ──")
+    print(f"  [10]  終點靜止判定點數        : {p['peak_quiet_run']}")
+    print(f"  [11]  陡坡偵測平滑視窗        : {p['steep_smooth_window']}")
+    print(f"  [12]  前峰百分比門檻          : {pre_str}  (負值=不限制)")
+    print(f"  [13]  顯示事件標記            : {sm_str}")
+    print(f"  [14]  平台區內縮比例 (%)      : {p['plateau_shrink_pct']}")
+    print("="*62)
+    print("  [ 0]  執行分析")
+    print("="*62)
+
+while True:
+    _show_menu(_p)
+    sel = input("請選擇要修改的參數編號，或按 0 執行: ").strip()
+    if sel in ("0", ""):
+        break
+    elif sel == "1":
+        v = input(f"  x 軸最小值 (目前 {_p['xmin']}): ").strip()
+        if v: _p["xmin"] = float(v)
+    elif sel == "2":
+        v = input(f"  x 軸最大值 (目前 {_p['xmax']}): ").strip()
+        if v: _p["xmax"] = float(v)
+    elif sel == "3":
+        v = input("  參數模式 (manual / auto): ").strip().lower()
+        if v: _p["mode"] = v
+    elif sel == "4":
+        v = input(f"  目標保留比例 0~1 (目前 {_p['target_keep_ratio']}): ").strip()
+        if v: _p["target_keep_ratio"] = min(max(float(v), 0.01), 0.5)
+    elif sel == "5":
+        v = input(f"  平滑視窗 (目前 {_p['smooth_window']}): ").strip()
+        if v: _p["smooth_window"] = max(1, int(v))
+    elif sel == "6":
+        v = input(f"  drift 係數 (目前 {_p['drift_k']}): ").strip()
+        if v: _p["drift_k"] = float(v)
+    elif sel == "7":
+        v = input(f"  threshold 係數 (目前 {_p['threshold_k']}): ").strip()
+        if v: _p["threshold_k"] = float(v)
+    elif sel == "8":
+        v = input(f"  轉折點最小間距 (目前 {_p['min_distance']}): ").strip()
+        if v: _p["min_distance"] = max(1, int(v))
+    elif sel == "9":
+        v = input(f"  Refine 搜尋半徑 (目前 {_p['refine_search_radius']}): ").strip()
+        if v: _p["refine_search_radius"] = max(1, int(v))
+    elif sel == "10":
+        v = input(f"  終點靜止判定點數 (目前 {_p['peak_quiet_run']}): ").strip()
+        if v: _p["peak_quiet_run"] = max(1, int(v))
+    elif sel == "11":
+        v = input(f"  陡坡偵測平滑視窗 (目前 {_p['steep_smooth_window']}): ").strip()
+        if v: _p["steep_smooth_window"] = max(1, int(v))
+    elif sel == "12":
+        v = input(f"  前峰百分比門檻，負值=不限制 (目前 {_p['pre_peak_percent_val']}): ").strip()
+        if v: _p["pre_peak_percent_val"] = float(v)
+    elif sel == "13":
+        v = input("  顯示事件標記 (y/n): ").strip().lower()
+        if v: _p["show_steep_markers"] = v in ("y", "yes", "1", "true", "是")
+    elif sel == "14":
+        v = input(f"  平台區內縮比例 % (目前 {_p['plateau_shrink_pct']}): ").strip()
+        if v: _p["plateau_shrink_pct"] = max(0.0, float(v))
+    else:
+        print("  無效的選擇，請重新輸入。")
+
+# 解開參數
+plot_xmin            = _p["xmin"]
+plot_xmax            = _p["xmax"]
+mode                 = _p["mode"]
+target_keep_ratio    = _p["target_keep_ratio"]
+smooth_window        = _p["smooth_window"]
+drift_k              = _p["drift_k"]
+threshold_k          = _p["threshold_k"]
+min_distance         = _p["min_distance"]
+refine_search_radius = _p["refine_search_radius"]
+peak_quiet_run       = _p["peak_quiet_run"]
+steep_smooth_window  = _p["steep_smooth_window"]
+pre_peak_percent_val = _p["pre_peak_percent_val"]
+pre_peak_percent     = None if pre_peak_percent_val < 0 else pre_peak_percent_val
+show_steep_markers   = _p["show_steep_markers"]
+plateau_shrink_pct   = _p["plateau_shrink_pct"]
+
 if plot_xmin >= plot_xmax:
-    print("x 軸範圍輸入無效（最小值需小於最大值），改用完整資料範圍。")
+    print("x 軸範圍無效，改用完整資料範圍。")
     plot_xmin, plot_xmax = default_xmin, default_xmax
 
-# CUSUM 參數
-saved_mode = params.get("mode", "auto")
-mode_text = input(f"參數模式：manual(手動)/auto(自動掃描)，預設 {saved_mode}: ").strip().lower()
-if not mode_text:
-    mode_text = saved_mode
-use_auto = mode_text in ("auto", "a", "自動")
+# ── 執行 CUSUM ──────────────────────────────────────────────────────────────
+use_auto = mode in ("auto", "a", "自動")
 
 if use_auto:
-    saved_target_ratio = params.get("target_keep_ratio", 0.06)
-    target_ratio_text = input(f"自動掃描目標保留比例(0~1，預設 {saved_target_ratio}): ").strip()
-    target_keep_ratio = saved_target_ratio if not target_ratio_text else float(target_ratio_text)
-    target_keep_ratio = min(max(target_keep_ratio, 0.01), 0.5)
-
     best = sweep_cusum_parameters(y_arr, x_arr, target_keep_ratio=target_keep_ratio)
-    turning_idx = best["turning_idx"]
-    y_smooth = best["y_smooth"]
-    drift = best["drift"]
-    threshold = best["threshold"]
+    turning_idx   = best["turning_idx"]
+    y_smooth      = best["y_smooth"]
+    drift         = best["drift"]
+    threshold     = best["threshold"]
     smooth_window = best["smooth_window"]
-    drift_k = best["drift_k"]
-    threshold_k = best["threshold_k"]
-    min_distance = best["min_distance"]
-    keep_idx = best["keep_idx"]
-    rmse = best["rmse"]
-    refine_search_radius = params.get("refine_search_radius", 4)
-
+    drift_k       = best["drift_k"]
+    threshold_k   = best["threshold_k"]
+    min_distance  = best["min_distance"]
+    keep_idx      = best["keep_idx"]
+    rmse          = best["rmse"]
     print("\n[Auto Sweep] 已選最佳參數")
-    print(
-        f"smooth_window={smooth_window}, drift_k={drift_k}, "
-        f"threshold_k={threshold_k}, min_distance={min_distance}"
-    )
+    print(f"smooth_window={smooth_window}, drift_k={drift_k}, "
+          f"threshold_k={threshold_k}, min_distance={min_distance}")
     print(f"score={best['score']:.6g}, keep_ratio={best['keep_ratio']*100:.2f}%, rmse={rmse:.6g}")
 else:
-    print("\n" + "="*60)
-    print("【CUSUM 轉折點參數】")
-    print("="*60 + "\n")
-    
-    s_sw = params.get("smooth_window", 5)
-    s_dk = params.get("drift_k", 0.5)
-    s_tk = params.get("threshold_k", 8.0)
-    s_md = params.get("min_distance", 8)
-
-    smooth_window_text = input(f"平滑視窗 (預設 {s_sw}): ").strip()
-    drift_k_text = input(f"CUSUM drift 係數 (預設 {s_dk}): ").strip()
-    threshold_k_text = input(f"CUSUM threshold 係數 (預設 {s_tk}): ").strip()
-    min_dist_text = input(f"轉折點最小間距 (預設 {s_md}): ").strip()
-
-    smooth_window = s_sw if not smooth_window_text else max(1, int(smooth_window_text))
-    drift_k = s_dk if not drift_k_text else float(drift_k_text)
-    threshold_k = s_tk if not threshold_k_text else float(threshold_k_text)
-    min_distance = s_md if not min_dist_text else max(1, int(min_dist_text))
-
-    s_rr = params.get("refine_search_radius", 4)
-    refine_radius_text = input(f"Refine 搜尋半徑 (較小=更貼近真實轉折點，預設 {s_rr}): ").strip()
-    refine_search_radius = s_rr if not refine_radius_text else max(1, int(refine_radius_text))
-
     turning_idx, y_smooth, drift, threshold = detect_turning_points_by_cusum(
         y_arr,
         smooth_window=smooth_window,
@@ -550,39 +624,6 @@ else:
         refine_search_radius=refine_search_radius,
     )
     keep_idx = np.array(sorted(set([0, len(points) - 1] + turning_idx.tolist())), dtype=int)
-
-print("\n" + "="*60)
-print("【陡升/陡降事件參數】")
-print("="*60 + "\n")
-
-peak_quiet_default = int(params.get("peak_quiet_run", 3))
-peak_quiet_text = input(
-    f"陡變終點判定：連續幾點未再創新高/新低即結束 (預設 {peak_quiet_default}): "
-).strip()
-peak_quiet_run = peak_quiet_default if not peak_quiet_text else max(1, int(peak_quiet_text))
-
-steep_sw_default = int(params.get("steep_smooth_window", 5))
-steep_sw_text = input(
-    f"陡坡偵測平滑視窗 (獨立於 CUSUM，較小值較不易誤判雜訊，預設 {steep_sw_default}): "
-).strip()
-steep_smooth_window = steep_sw_default if not steep_sw_text else max(1, int(steep_sw_text))
-
-pre_peak_percent_default = float(params.get("pre_peak_percent", 20.0))
-pre_peak_percent_text = input(
-    f"陡升起點/陡降終點門檻 = 前面局部高點的百分比 (預設 {pre_peak_percent_default}，輸入負值表示不限制): "
-).strip()
-pre_peak_percent_val = pre_peak_percent_default if not pre_peak_percent_text else float(pre_peak_percent_text)
-pre_peak_percent = None if pre_peak_percent_val < 0 else pre_peak_percent_val
-
-show_steep_markers_default = bool(params.get("show_steep_markers", True))
-show_steep_markers_hint = "y" if show_steep_markers_default else "n"
-show_steep_markers_text = input(
-    f"是否在圖上顯示陡升/陡降三角形記號? (y/n，預設 {show_steep_markers_hint}): "
-).strip().lower()
-if not show_steep_markers_text:
-    show_steep_markers = show_steep_markers_default
-else:
-    show_steep_markers = show_steep_markers_text in ("y", "yes", "1", "true", "是")
 
 steep_events, steep_start_th, steep_end_th = detect_steep_events(
     y_smooth=y_smooth,
@@ -605,6 +646,68 @@ steep_idx = sorted(
         for idx in (event["start_idx"], event["end_idx"])
     }
 )
+
+# ── 陡升終點 → 陡降起點 平台區積分平均 ─────────────────────────────────────
+def compute_plateau_segments(steep_events, x_arr, y_arr, shrink_pct):
+    """找每個陡升終點之後最近的陡降起點，在內縮後的範圍計算梯形積分平均值。"""
+    up_ends = sorted(
+        [(e["end_idx"], e) for e in steep_events if e["direction"] == "up"],
+        key=lambda t: t[0],
+    )
+    down_starts = sorted(
+        [(e["start_idx"], e) for e in steep_events if e["direction"] == "down"],
+        key=lambda t: t[0],
+    )
+    segments = []
+    for rise_end_idx, _ in up_ends:
+        # 找緊接在陡升終點之後的陡降起點
+        match = next(
+            ((fi, fe) for fi, fe in down_starts if fi > rise_end_idx), None
+        )
+        if match is None:
+            continue
+        fall_start_idx, _ = match
+        x_a = float(x_arr[rise_end_idx])
+        x_b = float(x_arr[fall_start_idx])
+        width = x_b - x_a
+        if width <= 0:
+            continue
+        margin = shrink_pct / 100.0 * width
+        x_inner_a = x_a + margin
+        x_inner_b = x_b - margin
+        if x_inner_a >= x_inner_b:
+            continue
+        mask = (x_arr >= x_inner_a) & (x_arr <= x_inner_b)
+        if np.sum(mask) < 2:
+            continue
+        x_seg = x_arr[mask]
+        y_seg = y_arr[mask]
+        integral = float(np.trapezoid(y_seg, x_seg))
+        avg_value = integral / (x_inner_b - x_inner_a)
+        segments.append({
+            "rise_end_idx":   int(rise_end_idx),
+            "fall_start_idx": int(fall_start_idx),
+            "x_full_start":   x_a,
+            "x_full_end":     x_b,
+            "x_inner_start":  x_inner_a,
+            "x_inner_end":    x_inner_b,
+            "integral":       integral,
+            "avg_value":      avg_value,
+            "n_points":       int(np.sum(mask)),
+        })
+    return segments
+
+plateau_segments = compute_plateau_segments(steep_events, x_arr, y_arr, plateau_shrink_pct)
+if plateau_segments:
+    print(f"\n平台區段數: {len(plateau_segments)}  (內縮比例 {plateau_shrink_pct}%)")
+    for k, seg in enumerate(plateau_segments):
+        print(
+            f"  [{k+1}] x={seg['x_full_start']:.4g}~{seg['x_full_end']:.4g}  "
+            f"內縮後 {seg['x_inner_start']:.4g}~{seg['x_inner_end']:.4g}  "
+            f"avg={seg['avg_value']:.6g}  n={seg['n_points']}"
+        )
+else:
+    print("\n未找到有效的陡升終點→陡降起點配對平台區段。")
 
 final_keep_idx = np.array(sorted(set(keep_idx.tolist() + steep_idx)), dtype=int)
 compressed = points[final_keep_idx]
@@ -634,66 +737,130 @@ print(
     f"threshold_k={threshold_k}, min_distance={min_distance}"
 )
 
-fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+# ── 建立重建序列（供第三圖使用）──────────────────────────────────────────
+plateau_intervals = [
+    (seg["x_full_start"], seg["x_full_end"],
+     (seg["x_full_start"] + seg["x_full_end"]) / 2.0,
+     seg["avg_value"])
+    for seg in plateau_segments
+] if plateau_segments else []
 
-axes[0].plot(points[:, 0], points[:, 1], color="steelblue", linewidth=0.8, label=f"原始資料 ({len(points)} 點)")
-if len(turning_idx) > 0:
-    axes[0].scatter(
-        points[turning_idx, 0],
-        points[turning_idx, 1],
-        s=14,
-        color="black",
-        alpha=0.8,
-        label=f"CUSUM 轉折點 ({len(turning_idx)} 點)",
-    )
-# 四類陡崩標記
+# 陡升/陡降區間 → 各取中間時間 + 平均值作為代表點
+steep_rep_intervals = []
+for e in steep_events:
+    si, ei = e["start_idx"], e["end_idx"]
+    xa, xb = float(x_arr[si]), float(x_arr[ei])
+    seg_y = y_arr[si:ei + 1]
+    avg_v = float(np.mean(seg_y)) if len(seg_y) > 0 else float(y_arr[si])
+    steep_rep_intervals.append((xa, xb, (xa + xb) / 2.0, avg_v))
+
+def in_any_steep(x_val):
+    for xa, xb, _, _ in steep_rep_intervals:
+        if xa <= x_val <= xb:
+            return True
+    return False
+
+def in_any_plateau(x_val):
+    for xa, xb, _, _ in plateau_intervals:
+        if xa <= x_val <= xb:
+            return True
+    return False
+
+rebuild_pts = []
+for cx, cy in compressed:
+    if in_any_steep(cx):
+        pass  # 陡升陡降區域內壓縮點全部略去，改用代表點
+    elif in_any_plateau(cx):
+        is_plateau_endpoint = any(
+            abs(cx - seg["x_full_start"]) < 1e-9 or abs(cx - seg["x_full_end"]) < 1e-9
+            for seg in plateau_segments
+        ) if plateau_segments else False
+        if is_plateau_endpoint:
+            rebuild_pts.append((cx, cy))
+    else:
+        rebuild_pts.append((cx, cy))
+
+# 插入陡升/陡降代表點
+for xa, xb, xmid, avg_v in steep_rep_intervals:
+    rebuild_pts.append((xmid, avg_v))
+
+for xa, xb, xmid, avg_val in plateau_intervals:
+    rebuild_pts.append((xmid, avg_val))
+
+rebuild_pts.sort(key=lambda t: t[0])
+rebuild_x = np.array([p[0] for p in rebuild_pts])
+rebuild_y = np.array([p[1] for p in rebuild_pts])
+
+# ── 三張子圖合一 figure ───────────────────────────────────────────────────
+ratio = len(compressed) / len(points) * 100
+fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+
+# 子圖一：原始資料 + CUSUM 轉折點 + 陡升陡降標記
 rise_start_idx  = [e["start_idx"] for e in steep_events if e["direction"] == "up"]
 rise_end_idx    = [e["end_idx"]   for e in steep_events if e["direction"] == "up"]
 fall_start_idx  = [e["start_idx"] for e in steep_events if e["direction"] == "down"]
 fall_end_idx    = [e["end_idx"]   for e in steep_events if e["direction"] == "down"]
 
+axes[0].plot(points[:, 0], points[:, 1], color="steelblue", linewidth=0.8, label=f"原始資料 ({len(points)} 點)")
+if len(turning_idx) > 0:
+    axes[0].scatter(
+        points[turning_idx, 0], points[turning_idx, 1],
+        s=14, color="black", alpha=0.8,
+        label=f"CUSUM 轉折點 ({len(turning_idx)} 點)",
+    )
 marker_groups = [
-    (rise_start_idx,  "^",  "limegreen", "陡升起點"),
-    (rise_end_idx,    "v",  "green",     "陡升終點"),
-    (fall_start_idx,  "v",  "tomato",    "陡降起點"),
-    (fall_end_idx,    "^",  "red",       "陡降終點"),
+    (rise_start_idx, "^", "limegreen", "陡升起點"),
+    (rise_end_idx,   "v", "green",     "陡升終點"),
+    (fall_start_idx, "v", "tomato",    "陡降起點"),
+    (fall_end_idx,   "^", "red",       "陡降終點"),
 ]
 if show_steep_markers:
     for idx_list, marker, color, label_text in marker_groups:
         if idx_list:
             axes[0].scatter(
-                points[idx_list, 0],
-                points[idx_list, 1],
+                points[idx_list, 0], points[idx_list, 1],
                 s=60, marker=marker, color=color, zorder=5,
                 label=f"{label_text} ({len(idx_list)})",
             )
 axes[0].set_ylabel("Value")
-axes[0].set_title(f"CUSUM 轉折點偵測：{channel_col} ({matched_wavelength} nm)")
-axes[0].set_xlim(plot_xmin, plot_xmax)
+axes[0].set_title(f"① CUSUM 轉折點偵測：{channel_col} ({matched_wavelength} nm)")
 axes[0].set_ylim(plot_ymin, plot_ymax)
-axes[0].legend(loc="upper right")
+axes[0].legend(loc="upper right", fontsize=7, ncol=3)
 axes[0].grid(True, alpha=0.3)
 
+# 子圖二：壓縮後保留點
 axes[1].plot(
-    compressed[:, 0],
-    compressed[:, 1],
-    color="tomato",
-    linewidth=1.2,
-    marker="o",
-    markersize=2,
+    compressed[:, 0], compressed[:, 1],
+    color="tomato", linewidth=1.2, marker="o", markersize=2,
     label=f"壓縮後保留點 ({len(compressed)} 點)",
 )
-axes[1].set_xlabel("Time")
 axes[1].set_ylabel("Value")
-axes[1].set_title("壓縮後：保留 CUSUM + Steep 起迄點")
-axes[1].set_xlim(plot_xmin, plot_xmax)
+axes[1].set_title(f"② 壓縮結果  壓縮率: {ratio:.1f}%")
 axes[1].set_ylim(plot_ymin, plot_ymax)
 axes[1].legend(loc="upper right")
 axes[1].grid(True, alpha=0.3)
 
-ratio = len(compressed) / len(points) * 100
-plt.suptitle(f"CUSUM 壓縮比較  壓縮率: {ratio:.1f}%", fontsize=13)
-plt.tight_layout()
+# 子圖三：只畫平台積分平均值連線
+plateau_rep_x = [xmid for _, _, xmid, _ in plateau_intervals]
+plateau_rep_y = [avg  for _, _, _, avg  in plateau_intervals]
+
+avg_pts = sorted([(x, y) for x, y in zip(plateau_rep_x, plateau_rep_y)], key=lambda t: t[0])
+avg_x = np.array([p[0] for p in avg_pts])
+avg_y = np.array([p[1] for p in avg_pts])
+
+if len(avg_x) > 0:
+    axes[2].plot(avg_x, avg_y, color="darkorange", linewidth=1.5,
+                 label=f"積分平均值連線 ({len(avg_x)} 點)")
+axes[2].set_xlabel("Time")
+axes[2].set_ylabel("Value")
+axes[2].set_title("③ 平台積分平均值連線")
+axes[2].set_xlim(plot_xmin, plot_xmax)
+axes[2].set_ylim(plot_ymin, plot_ymax)
+axes[2].legend(loc="upper right", fontsize=7)
+axes[2].grid(True, alpha=0.3)
+
+fig.suptitle(f"CUSUM 壓縮分析  {channel_col} ({matched_wavelength} nm)", fontsize=13)
+fig.tight_layout()
 plt.show()
 
 output_path = Path(__file__).with_name(f"compressed_cusum_{channel_col}_{matched_wavelength}nm.csv")
@@ -758,6 +925,7 @@ save_params({
     "peak_quiet_run": peak_quiet_run,
     "steep_smooth_window": steep_smooth_window,
     "pre_peak_percent": pre_peak_percent_val,
+    "plateau_shrink_pct": plateau_shrink_pct,
     "show_steep_markers": show_steep_markers,
 })
 print(f"參數已儲存: {PARAMS_FILE}")

@@ -1,79 +1,73 @@
-# PLA - CUSUM Turning Points and Steep Event Compression
+# PLA - CUSUM Compression with Steep Events and Plateau Integral Averages
 
-This project compresses SPOES time-series spectra and preserves key behavior:
+This project compresses SPOES time-series spectra while preserving key behavior:
 - CUSUM turning points
 - steep rise/fall start and end events
+- plateau representative values computed by trapezoidal integral average
 
 Main script:
 - `PlaTest_cusum_turning.py`
 
-## Data and Output
+## Input Format
 
-Input data format (SPOES CSV):
-- header region with wavelength metadata
-- `[Data]` section with `Timestamp`, `No`, and `Ch1_*` channels
+The script reads SPOES CSV files with:
+- wavelength metadata in the header
+- a `[Data]` section containing `Timestamp`, `No`, and `Ch1_*` columns
 
-Main outputs:
+At runtime, you input a target wavelength (nm), and the script auto-selects the closest channel.
+
+## Interactive Parameter Menu
+
+Parameters are edited via a numbered menu (single-parameter edit loop) and executed with `0`.
+
+Current menu items:
+1. x min
+2. x max
+3. mode (`manual` / `auto`)
+4. target keep ratio (auto mode)
+5. CUSUM smooth window
+6. CUSUM drift k
+7. CUSUM threshold k
+8. CUSUM minimum turning-point distance
+9. CUSUM refine search radius
+10. steep end quiet-run length
+11. steep detection smooth window
+12. pre-peak percent gate (`<0` means disabled)
+13. show steep markers on subplot 1
+14. plateau shrink percent
+
+## Core Behavior
+
+### CUSUM turning points
+- Detects turning points from smoothed signal.
+- Supports manual parameters or auto sweep mode.
+- Refine stage is controlled by `refine_search_radius`.
+
+### Steep event detection
+- Detects rise/fall events with independent steep smoothing (`steep_smooth_window`).
+- Uses relative gate `pre_peak_percent` based on previous local peak level.
+
+### Plateau integral averages
+- Pairs each rise end with the next fall start.
+- Shrinks interval inward by `plateau_shrink_pct`.
+- Computes representative average using `np.trapezoid(y, x) / (x_end - x_start)`.
+
+## Visualization (Single 3-Subplot Figure)
+
+1. Original data + CUSUM turning points + optional steep markers
+2. Compressed retained points
+3. Plateau integral average line only (no marker points)
+
+## Output Files
+
 - `compressed_cusum_<channel>_<wavelength>nm.csv`
+  - includes retained points and flags (`is_cusum_turning`, `is_steep_endpoint`)
 - `steep_timeline_<channel>_<wavelength>nm.csv`
-
-## Recent Update Process
-
-### 1) Independent steep detection smoothing
-Commit: `cfd66f0`
-
-What changed:
-- Added `steep_smooth_window` independent from CUSUM `smooth_window`.
-- Steep event slope/sigma detection now uses this dedicated smoothing path.
-
-Why:
-- Avoid steep-event misdetection when CUSUM smoothing is large.
-
-### 2) CUSUM refinement radius configurable + grouped prompts
-Commit: `ea41be1`
-
-What changed:
-- Added `refine_search_radius` for turning-point refine stage.
-- Input flow now visually separated into two blocks:
-  - CUSUM parameters
-  - steep rise/fall parameters
-
-Why:
-- Better alignment to real turning locations.
-- Better input UX and clearer parameter grouping.
-
-### 3) Strength gate changed to pre-peak percentage
-Commit: `3789f5d`
-
-What changed:
-- Replaced fixed absolute thresholds with `pre_peak_percent`.
-- Gate rule:
-  - steep rise start and steep fall end must be below
-    `previous local peak * pre_peak_percent / 100`.
-- For rise-start validation, reuse the gate value computed in previous fall-end step (no recalculation).
-
-Why:
-- Relative threshold is more robust across different intensity ranges.
-- Reusing previous fall gate keeps rise/fall pairing behavior consistent.
-
-## Current Key Parameters
-
-CUSUM related:
-- `smooth_window`
-- `drift_k`
-- `threshold_k`
-- `min_distance`
-- `refine_search_radius`
-
-Steep event related:
-- `peak_quiet_run`
-- `steep_smooth_window`
-- `pre_peak_percent`
-- `show_steep_markers`
+  - steep rise/fall timeline with timestamp, direction, event type, and slope metadata
 
 ## Parameter Persistence
 
-Run-time inputs are saved in:
+Runtime settings are saved to:
 - `PlaTest_cusum_turning.json`
 
 ## Quick Run
