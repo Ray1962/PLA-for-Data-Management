@@ -145,8 +145,12 @@ def merge_close_indices(indices, min_distance, max_index):
     return np.array(merged, dtype=int)
 
 
-def detect_turning_points_by_cusum(y, smooth_window=5, drift_k=0.5, threshold_k=8.0, min_distance=8):
-    """使用 CUSUM 偵測轉折點，回傳索引。"""
+def detect_turning_points_by_cusum(y, smooth_window=5, drift_k=0.5, threshold_k=8.0, min_distance=8, refine_search_radius=None):
+    """使用 CUSUM 偵測轉折點，回傳索引。
+
+    refine_search_radius: refine 搜尋半徑，None 表示使用 max(4, smooth_window*2)。
+    較小的值（如 2~4）可避免轉折點被拉離真實位置。
+    """
     y_smooth = moving_average(y, smooth_window)
     dy = np.diff(y_smooth)
     if len(dy) < 3:
@@ -163,7 +167,8 @@ def detect_turning_points_by_cusum(y, smooth_window=5, drift_k=0.5, threshold_k=
     threshold = threshold_k * sigma
 
     cp = cusum_change_points(centered, drift=drift, threshold=threshold)
-    refined = refine_turning_points(y_smooth, cp, search_radius=max(4, smooth_window * 2))
+    radius = refine_search_radius if refine_search_radius is not None else max(4, smooth_window * 2)
+    refined = refine_turning_points(y_smooth, cp, search_radius=radius)
     refined = merge_close_indices(refined, min_distance=min_distance, max_index=len(y) - 1)
 
     return refined, y_smooth, drift, threshold
@@ -171,6 +176,7 @@ def detect_turning_points_by_cusum(y, smooth_window=5, drift_k=0.5, threshold_k=
 
 def robust_slope_sigma(y_smooth):
     dy = np.diff(y_smooth)
+    
     if len(dy) == 0:
         return dy, 0.0
     baseline = float(np.median(dy))
@@ -192,11 +198,15 @@ def detect_steep_events(
     min_len=4,
     peak_quiet_run=3,
     steep_smooth_window=5,
+    rise_start_max=None,
+    fall_end_max=None,
 ):
     """偵測陡升/陡降事件，輸出每段起點與終點。
 
     steep_smooth_window：陡坡偵測專用平滑視窗，與 CUSUM 平滑視窗獨立。
     使用較小的視窗（預設 5）可保留真實斜率大小，避免大視窗壓低 sigma 導致誤判。
+    rise_start_max：陡升起點強度門泭，起點強度值必須小於此值才接受（None 表示不限制）。
+    fall_end_max：陡降終點強度門泭，終點強度值必須小於此值才接受（None 表示不限制）。
     """
     # 用獨立視窗重新平滑，不依賴傳入的 CUSUM y_smooth
     y_steep = moving_average(y_arr, steep_smooth_window)
@@ -274,6 +284,22 @@ def detect_steep_events(
                     end_idx = max(end_idx, extremum_idx)
             s_idx = max(0, start_idx)
             if end_idx - s_idx >= min_len:
+                # 陡升起點強度門泭檢查
+                if direction == "up" and rise_start_max is not None:
+                    if y_arr[s_idx] >= rise_start_max:
+                        state = "idle"
+                        direction = None
+                        no_new_extremum_run = 0
+                        i += 1
+                        continue
+                # 陡降終點強度門泭檢查
+                if direction == "down" and fall_end_max is not None:
+                    if y_arr[end_idx] >= fall_end_max:
+                        state = "idle"
+                        direction = None
+                        no_new_extremum_run = 0
+                        i += 1
+                        continue
                 seg = centered[s_idx : min(i + 1, len(centered))]
                 events.append(
                     {
@@ -462,6 +488,7 @@ if use_auto:
     min_distance = best["min_distance"]
     keep_idx = best["keep_idx"]
     rmse = best["rmse"]
+    refine_search_radius = params.get("refine_search_radius", 4)
 
     print("\n[Auto Sweep] 已選最佳參數")
     print(
@@ -470,6 +497,10 @@ if use_auto:
     )
     print(f"score={best['score']:.6g}, keep_ratio={best['keep_ratio']*100:.2f}%, rmse={rmse:.6g}")
 else:
+    print("\n" + "="*60)
+    print("【CUSUM 轉折點參數】")
+    print("="*60 + "\n")
+    
     s_sw = params.get("smooth_window", 5)
     s_dk = params.get("drift_k", 0.5)
     s_tk = params.get("threshold_k", 8.0)
@@ -485,14 +516,23 @@ else:
     threshold_k = s_tk if not threshold_k_text else float(threshold_k_text)
     min_distance = s_md if not min_dist_text else max(1, int(min_dist_text))
 
+    s_rr = params.get("refine_search_radius", 4)
+    refine_radius_text = input(f"Refine 搜尋半徑 (較小=更貼近真實轉折點，預設 {s_rr}): ").strip()
+    refine_search_radius = s_rr if not refine_radius_text else max(1, int(refine_radius_text))
+
     turning_idx, y_smooth, drift, threshold = detect_turning_points_by_cusum(
         y_arr,
         smooth_window=smooth_window,
         drift_k=drift_k,
         threshold_k=threshold_k,
         min_distance=min_distance,
+        refine_search_radius=refine_search_radius,
     )
     keep_idx = np.array(sorted(set([0, len(points) - 1] + turning_idx.tolist())), dtype=int)
+
+print("\n" + "="*60)
+print("【陡升/陡降事件參數】")
+print("="*60 + "\n")
 
 peak_quiet_default = int(params.get("peak_quiet_run", 3))
 peak_quiet_text = input(
@@ -505,6 +545,20 @@ steep_sw_text = input(
     f"陡坡偵測平滑視窗 (獨立於 CUSUM，較小值較不易誤判雜訊，預設 {steep_sw_default}): "
 ).strip()
 steep_smooth_window = steep_sw_default if not steep_sw_text else max(1, int(steep_sw_text))
+
+rise_start_max_default = params.get("rise_start_max", 2000)
+rise_start_max_text = input(
+    f"陡升起點強度上限 (起點強度須小於此值，-1 表示不限制，預設 {rise_start_max_default}): "
+).strip()
+rise_start_max_val = rise_start_max_default if not rise_start_max_text else float(rise_start_max_text)
+rise_start_max = None if rise_start_max_val < 0 else rise_start_max_val
+
+fall_end_max_default = params.get("fall_end_max", 2000)
+fall_end_max_text = input(
+    f"陡降終點強度上限 (終點強度須小於此值，-1 表示不限制，預設 {fall_end_max_default}): "
+).strip()
+fall_end_max_val = fall_end_max_default if not fall_end_max_text else float(fall_end_max_text)
+fall_end_max = None if fall_end_max_val < 0 else fall_end_max_val
 
 show_steep_markers_default = bool(params.get("show_steep_markers", True))
 show_steep_markers_hint = "y" if show_steep_markers_default else "n"
@@ -527,6 +581,8 @@ steep_events, steep_start_th, steep_end_th = detect_steep_events(
     min_len=4,
     peak_quiet_run=peak_quiet_run,
     steep_smooth_window=steep_smooth_window,
+    rise_start_max=rise_start_max,
+    fall_end_max=fall_end_max,
 )
 
 steep_idx = sorted(
@@ -685,8 +741,11 @@ save_params({
     "drift_k": drift_k,
     "threshold_k": threshold_k,
     "min_distance": min_distance,
+    "refine_search_radius": refine_search_radius,
     "peak_quiet_run": peak_quiet_run,
     "steep_smooth_window": steep_smooth_window,
+    "rise_start_max": rise_start_max_val,
+    "fall_end_max": fall_end_max_val,
     "show_steep_markers": show_steep_markers,
 })
 print(f"參數已儲存: {PARAMS_FILE}")
