@@ -191,9 +191,16 @@ def detect_steep_events(
     end_run=5,
     min_len=4,
     peak_quiet_run=3,
+    steep_smooth_window=5,
 ):
-    """偵測陡升/陡降事件，輸出每段起點與終點。"""
-    centered, sigma = robust_slope_sigma(y_smooth)
+    """偵測陡升/陡降事件，輸出每段起點與終點。
+
+    steep_smooth_window：陡坡偵測專用平滑視窗，與 CUSUM 平滑視窗獨立。
+    使用較小的視窗（預設 5）可保留真實斜率大小，避免大視窗壓低 sigma 導致誤判。
+    """
+    # 用獨立視窗重新平滑，不依賴傳入的 CUSUM y_smooth
+    y_steep = moving_average(y_arr, steep_smooth_window)
+    centered, sigma = robust_slope_sigma(y_steep)
     if len(centered) == 0:
         return [], 0.0, 0.0
 
@@ -213,7 +220,7 @@ def detect_steep_events(
                 state = "active"
                 direction = "up"
                 start_idx = i
-                extremum_idx = min(len(y_arr) - 1, start_idx)
+                extremum_idx = min(len(y_steep) - 1, start_idx)
                 no_new_extremum_run = 0
                 i += start_run
                 continue
@@ -221,7 +228,7 @@ def detect_steep_events(
                 state = "active"
                 direction = "down"
                 start_idx = i
-                extremum_idx = min(len(y_arr) - 1, start_idx)
+                extremum_idx = min(len(y_steep) - 1, start_idx)
                 no_new_extremum_run = 0
                 i += start_run
                 continue
@@ -229,16 +236,16 @@ def detect_steep_events(
             continue
 
         local_extremum_end = False
-        cur_point_idx = min(len(y_arr) - 1, i + 1)
+        cur_point_idx = min(len(y_steep) - 1, i + 1)
         if direction == "up":
-            if y_arr[cur_point_idx] > y_arr[extremum_idx]:
+            if y_steep[cur_point_idx] > y_steep[extremum_idx]:
                 extremum_idx = cur_point_idx
                 no_new_extremum_run = 0
             else:
                 no_new_extremum_run += 1
             local_extremum_end = no_new_extremum_run >= peak_quiet_run
         else:
-            if y_arr[cur_point_idx] < y_arr[extremum_idx]:
+            if y_steep[cur_point_idx] < y_steep[extremum_idx]:
                 extremum_idx = cur_point_idx
                 no_new_extremum_run = 0
             else:
@@ -275,7 +282,7 @@ def detect_steep_events(
                         "end_idx": int(end_idx),
                         "start_x": float(x_arr[s_idx]),
                         "end_x": float(x_arr[end_idx]),
-                        "start_y": float(y_arr[s_idx]),
+                        "start_y": float(y_arr[s_idx]),   # 輸出原始值（未平滑）
                         "end_y": float(y_arr[end_idx]),
                         "delta_y": float(y_arr[end_idx] - y_arr[s_idx]),
                         "max_abs_slope": float(np.max(np.abs(seg))) if len(seg) else 0.0,
@@ -493,6 +500,12 @@ peak_quiet_text = input(
 ).strip()
 peak_quiet_run = peak_quiet_default if not peak_quiet_text else max(1, int(peak_quiet_text))
 
+steep_sw_default = int(params.get("steep_smooth_window", 5))
+steep_sw_text = input(
+    f"陡坡偵測平滑視窗 (獨立於 CUSUM，較小值較不易誤判雜訊，預設 {steep_sw_default}): "
+).strip()
+steep_smooth_window = steep_sw_default if not steep_sw_text else max(1, int(steep_sw_text))
+
 show_steep_markers_default = bool(params.get("show_steep_markers", True))
 show_steep_markers_hint = "y" if show_steep_markers_default else "n"
 show_steep_markers_text = input(
@@ -513,6 +526,7 @@ steep_events, steep_start_th, steep_end_th = detect_steep_events(
     end_run=5,
     min_len=4,
     peak_quiet_run=peak_quiet_run,
+    steep_smooth_window=steep_smooth_window,
 )
 
 steep_idx = sorted(
@@ -672,6 +686,7 @@ save_params({
     "threshold_k": threshold_k,
     "min_distance": min_distance,
     "peak_quiet_run": peak_quiet_run,
+    "steep_smooth_window": steep_smooth_window,
     "show_steep_markers": show_steep_markers,
 })
 print(f"參數已儲存: {PARAMS_FILE}")
